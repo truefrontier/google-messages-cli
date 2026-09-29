@@ -6,7 +6,7 @@ import { OutputFormatter, OutputOptions } from './output';
 import * as path from 'path';
 import * as os from 'os';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 
 const EXIT_CODES = {
   OK: 0,
