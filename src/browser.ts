@@ -7,6 +7,9 @@ export interface BrowserConfig {
   profilePath?: string;
 }
 
+const LIST_CONTAINER_SELECTOR =
+  'mws-conversations-list, [data-e2e-conversation-list], nav.conversation-list, .conversations-list';
+
 export class MessagesSession {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
@@ -46,10 +49,96 @@ export class MessagesSession {
 
     await this.page.goto('https://messages.google.com/web/conversations', {
       waitUntil: 'domcontentloaded',
-      timeout: 30000
+      timeout: 60000
     });
 
-    await this.page.waitForTimeout(2000);
+    await this.dismissUseHereIfPresent();
+    await this.waitForConversationListReady();
+  }
+
+  /**
+   * Google Messages only keeps one active web client. If another window holds
+   * the session, a "Use here" / similar control appears and the list never fills.
+   */
+  private async dismissUseHereIfPresent(): Promise<void> {
+    if (!this.page) return;
+
+    const patterns = [
+      /Use Messages here/i,
+      /Use here/i,
+      /Yes,? use here/i,
+      /Switch here/i
+    ];
+
+    for (const pattern of patterns) {
+      const btn = this.page.getByRole('button', { name: pattern });
+      if (await btn.count() > 0) {
+        await btn.first().click({ timeout: 3000 }).catch(() => undefined);
+        await this.page.waitForTimeout(1500);
+        return;
+      }
+      const text = this.page.getByText(pattern);
+      if (await text.count() > 0) {
+        await text.first().click({ timeout: 3000 }).catch(() => undefined);
+        await this.page.waitForTimeout(1500);
+        return;
+      }
+    }
+  }
+
+  /**
+   * The conversations shell (`mws-conversations-list`) appears before items.
+   * Scraping too early returns []. Wait for real thread rows (or a settled empty list).
+   */
+  private async waitForConversationListReady(timeoutMs: number = 45000): Promise<void> {
+    if (!this.page) {
+      throw new Error('Browser not launched');
+    }
+
+    const start = Date.now();
+
+    // First, wait for either QR / pair UI or the list shell
+    while (Date.now() - start < timeoutMs) {
+      const qr = await this.page.locator('canvas[aria-label*="QR"]').count();
+      const pair = await this.page.getByText('Pair your phone').count();
+      if (qr > 0 || pair > 0) {
+        return; // caller / isPaired will report unpaired
+      }
+
+      const listShell = await this.page.locator(LIST_CONTAINER_SELECTOR).count();
+      if (listShell > 0) {
+        break;
+      }
+      await this.page.waitForTimeout(500);
+    }
+
+    // Then wait for items, or for the loading spinner to clear with no items
+    while (Date.now() - start < timeoutMs) {
+      const items = await this.page.locator('mws-conversation-list-item').count();
+      if (items > 0) {
+        // Brief settle so snippet/timestamp nodes hydrate
+        await this.page.waitForTimeout(500);
+        return;
+      }
+
+      const loading = await this.page
+        .locator('mws-conversations-list mws-spinner, nav.conversation-list mws-spinner, [aria-label="Loading conversation list"]')
+        .count();
+      const listShell = await this.page.locator(LIST_CONTAINER_SELECTOR).count();
+
+      // Shell present, no spinner, no items → genuinely empty list
+      if (listShell > 0 && loading === 0) {
+        await this.page.waitForTimeout(1000);
+        const itemsAgain = await this.page.locator('mws-conversation-list-item').count();
+        if (itemsAgain > 0) return;
+        const stillLoading = await this.page
+          .locator('[aria-label="Loading conversation list"]')
+          .count();
+        if (stillLoading === 0) return;
+      }
+
+      await this.page.waitForTimeout(500);
+    }
   }
 
   async isPaired(): Promise<boolean> {
@@ -68,7 +157,7 @@ export class MessagesSession {
         return false;
       }
 
-      const conversationsList = await this.page.locator('[data-e2e-conversations-list], mws-conversations-list, .conversations-list').count();
+      const conversationsList = await this.page.locator(LIST_CONTAINER_SELECTOR).count();
       return conversationsList > 0;
     } catch (error) {
       return false;
@@ -107,7 +196,8 @@ export class MessagesSession {
       throw new Error('Not paired with phone');
     }
 
-    await this.page.waitForTimeout(1000);
+    // Ensure list rows are present (navigateToMessages usually already waited)
+    await this.waitForConversationListReady(20000);
 
     const conversations = await this.page.evaluate(() => {
       const results: Array<{
@@ -118,19 +208,31 @@ export class MessagesSession {
         unread: boolean;
       }> = [];
 
-      const convElements = document.querySelectorAll('mws-conversation-list-item, [data-e2e-conversation-item]');
+      const convElements = document.querySelectorAll('mws-conversation-list-item');
       
       for (const conv of Array.from(convElements)) {
         try {
-          const nameEl = conv.querySelector('.name, [data-e2e-contact-name], h3, .contact-name');
-          const previewEl = conv.querySelector('.snippet, [data-e2e-snippet], .preview-text, .message-preview');
-          const timeEl = conv.querySelector('.time, [data-e2e-timestamp], .timestamp');
+          const nameEl =
+            conv.querySelector('[data-e2e-conversation-name]') ||
+            conv.querySelector('h2.name, .name, [data-e2e-contact-name], h3, .contact-name');
+          const previewEl =
+            conv.querySelector('mws-conversation-snippet') ||
+            conv.querySelector('.snippet, [data-e2e-snippet], .preview-text, .message-preview');
+          const timeEl =
+            conv.querySelector('mws-relative-timestamp') ||
+            conv.querySelector('.snippet-timestamp, .time, [data-e2e-timestamp], .timestamp');
+          const link =
+            conv.querySelector('a[data-e2e-conversation], a.list-item') ||
+            conv.querySelector('a');
+          const unreadAttr = link?.getAttribute('data-e2e-is-unread');
           const unreadIndicator = conv.querySelector('.unread, [data-e2e-unread], .unread-indicator');
 
           const name = nameEl?.textContent?.trim() || 'Unknown';
           const preview = previewEl?.textContent?.trim() || '';
           const timestamp = timeEl?.textContent?.trim() || '';
-          const unread = !!unreadIndicator;
+          const unread =
+            unreadAttr === 'true' ||
+            !!unreadIndicator;
 
           results.push({
             name,
@@ -158,6 +260,8 @@ export class MessagesSession {
       throw new Error('Not paired with phone');
     }
 
+    await this.waitForConversationListReady(20000);
+
     const searchButton = this.page.locator('button[aria-label*="Search"], [data-e2e-search-button], .search-button').first();
     
     if (await searchButton.count() > 0) {
@@ -168,7 +272,7 @@ export class MessagesSession {
       await searchInput.fill(query);
       await this.page.waitForTimeout(1000);
 
-      const firstResult = this.page.locator('mws-conversation-list-item, [data-e2e-conversation-item]').first();
+      const firstResult = this.page.locator('mws-conversation-list-item, [data-e2e-conversation]').first();
       if (await firstResult.count() > 0) {
         await firstResult.click();
         await this.page.waitForTimeout(1000);
@@ -176,15 +280,17 @@ export class MessagesSession {
       }
     }
 
-    const conversations = this.page.locator('mws-conversation-list-item, [data-e2e-conversation-item]');
+    const conversations = this.page.locator('mws-conversation-list-item');
     const count = await conversations.count();
 
     for (let i = 0; i < count; i++) {
       const conv = conversations.nth(i);
-      const text = await conv.textContent();
+      const nameText =
+        (await conv.locator('[data-e2e-conversation-name], h2.name, .name').first().textContent().catch(() => null)) ||
+        (await conv.textContent());
       
-      if (text && (text.toLowerCase().includes(query.toLowerCase()) || 
-                   query.toLowerCase().includes(text.toLowerCase()))) {
+      if (nameText && (nameText.toLowerCase().includes(query.toLowerCase()) ||
+                   query.toLowerCase().includes(nameText.toLowerCase()))) {
         await conv.click();
         await this.page.waitForTimeout(1000);
         return true;

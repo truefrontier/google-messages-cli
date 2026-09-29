@@ -1,6 +1,6 @@
 {
   "name": "google-messages-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent-native CLI for Google Messages for web",
   "main": "dist/index.js",
   "bin": {
