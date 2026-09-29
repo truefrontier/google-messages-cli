@@ -1,0 +1,40 @@
+{
+  "name": "google-messages-cli",
+  "version": "0.1.0",
+  "description": "Agent-native CLI for Google Messages for web",
+  "main": "dist/index.js",
+  "bin": {
+    "gmsg": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "google-messages",
+    "sms",
+    "messaging",
+    "cli",
+    "agent"
+  ],
+  "author": "Kevin Nakao",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.48.0",
+    "commander": "^12.1.0",
+    "chalk": "^4.1.2",
+    "cli-table3": "^0.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.9",
+    "typescript": "^5.7.2",
+    "@types/jest": "^29.5.14",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
