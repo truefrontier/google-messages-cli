@@ -1,3 +1,5 @@
+> **Archived.** Replaced by [webcli](https://github.com/truefrontier/webcli). Install: `brew install truefrontier/tap/webcli` or `pipx install truefrontier-webcli`. The equivalent command is now `webcli messages`.
+
 # google-messages-cli
 
 Agent-native CLI for Google Messages for web (`messages.google.com`).
